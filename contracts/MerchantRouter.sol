@@ -4,14 +4,13 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./PoolManager.sol";
 import "./LoanEngine.sol";
-import {FHE, euint64, externalEuint64, ebool} from "@fhevm/solidity/lib/FHE.sol";
-import {FhenixEthereumConfig} from "@fhevm/solidity/config/FhenixConfig.sol";
+import {FHE, euint64, InEuint64, ebool} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
 /**
  * @title MerchantRouter
- * @dev Routes payments to merchants privately using Fhenix FHEVM.
+ * @dev Routes payments to merchants privately using Fhenix CoFHE.
  */
-contract MerchantRouter is Ownable, FhenixEthereumConfig {
+contract MerchantRouter is Ownable {
     PoolManager public poolManager;
     LoanEngine public loanEngine;
 
@@ -29,11 +28,11 @@ contract MerchantRouter is Ownable, FhenixEthereumConfig {
     /**
      * @dev Customer pays a merchant using their credit line (Encrypted).
      */
-    function payWithCredit(address merchant, address tokenOnSource, externalEuint64 encryptedAmount, bytes calldata inputProof) external {
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+    function payWithCredit(address merchant, address tokenOnSource, InEuint64 calldata encryptedAmount) external {
+        euint64 amount = FHE.asEuint64(encryptedAmount);
         
         // 1. Create a loan for the customer (msg.sender)
-        loanEngine.createLoan(msg.sender, encryptedAmount, inputProof, tokenOnSource);
+        loanEngine.createLoan(msg.sender, encryptedAmount, tokenOnSource);
 
         // 2. Crediting the merchant
         if (FHE.isInitialized(merchantBalances[merchant][tokenOnSource])) {
@@ -52,21 +51,19 @@ contract MerchantRouter is Ownable, FhenixEthereumConfig {
     /**
      * @dev Merchant withdraws their earned funds (Encrypted).
      */
-    function merchantWithdraw(address tokenOnSource, externalEuint64 encryptedAmount, bytes calldata inputProof, uint64 destChainId) external {
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+    function merchantWithdraw(address tokenOnSource, InEuint64 calldata encryptedAmount, uint64 destChainId) external {
+        euint64 amount = FHE.asEuint64(encryptedAmount);
         euint64 balance = merchantBalances[msg.sender][tokenOnSource];
         
-        ebool hasBalance = FHE.ge(balance, amount);
+        ebool hasBalance = FHE.gte(balance, amount);
         euint64 actualAmount = FHE.select(hasBalance, amount, balance);
         
         merchantBalances[msg.sender][tokenOnSource] = FHE.sub(balance, actualAmount);
         FHE.allow(merchantBalances[msg.sender][tokenOnSource], msg.sender);
         FHE.allowThis(merchantBalances[msg.sender][tokenOnSource]);
         
-        // Relies on PoolManager to authorize withdrawal. 
-        // We pass the encrypted amount to PoolManager.
-        // PoolManager will decrypt it for the bridge event.
-        poolManager.requestWithdrawal(tokenOnSource, encryptedAmount, inputProof, destChainId);
+        // Relies on PoolManager to authorize withdrawal.
+        poolManager.requestWithdrawal(tokenOnSource, encryptedAmount, destChainId);
 
         emit MerchantWithdrawn(msg.sender, tokenOnSource);
     }
@@ -75,4 +72,3 @@ contract MerchantRouter is Ownable, FhenixEthereumConfig {
         return merchantBalances[merchant][token];
     }
 }
-

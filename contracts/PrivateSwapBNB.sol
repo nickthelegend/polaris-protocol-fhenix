@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { FHE, euint64, externalEuint64, ebool } from "@fhevm/solidity/lib/FHE.sol";
-import { FhenixEthereumConfig } from "@fhevm/solidity/config/FhenixConfig.sol";
+import { FHE, euint64, InEuint64, ebool } from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract PrivateSwapBNB is FhenixEthereumConfig {
+contract PrivateSwapBNB {
     IERC20 public immutable token;
     
     mapping(address => euint64) private encryptedBalances;
@@ -18,8 +17,8 @@ contract PrivateSwapBNB is FhenixEthereumConfig {
         token = IERC20(_token);
     }
     
-    function depositEncrypted(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+    function depositEncrypted(InEuint64 calldata encryptedAmount) external {
+        euint64 amount = FHE.asEuint64(encryptedAmount);
         
         euint64 newBalance;
         if (FHE.isInitialized(encryptedBalances[msg.sender])) {
@@ -35,13 +34,13 @@ contract PrivateSwapBNB is FhenixEthereumConfig {
         emit DepositEncrypted(msg.sender);
     }
     
-    function withdrawEncrypted(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
+    function withdrawEncrypted(InEuint64 calldata encryptedAmount) external {
         require(FHE.isInitialized(encryptedBalances[msg.sender]), "No balance");
         
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+        euint64 amount = FHE.asEuint64(encryptedAmount);
         euint64 currentBalance = encryptedBalances[msg.sender];
         
-        ebool hasBalance = FHE.le(amount, currentBalance);
+        ebool hasBalance = FHE.lte(amount, currentBalance);
         euint64 amountToSubtract = FHE.select(hasBalance, amount, currentBalance);
         
         euint64 newBalance = FHE.sub(currentBalance, amountToSubtract);
@@ -58,16 +57,15 @@ contract PrivateSwapBNB is FhenixEthereumConfig {
     }
     
     function swapEncrypted(
-        externalEuint64 encryptedAmountIn,
-        bytes calldata inputProof,
+        InEuint64 calldata encryptedAmountIn,
         address targetToken
     ) external {
         require(FHE.isInitialized(encryptedBalances[msg.sender]), "No balance");
         
-        euint64 amountIn = FHE.fromExternal(encryptedAmountIn, inputProof);
+        euint64 amountIn = FHE.asEuint64(encryptedAmountIn);
         euint64 currentBalance = encryptedBalances[msg.sender];
         
-        ebool hasBalance = FHE.le(amountIn, currentBalance);
+        ebool hasBalance = FHE.lte(amountIn, currentBalance);
         euint64 amountToSubtract = FHE.select(hasBalance, amountIn, currentBalance);
         
         euint64 newBalance = FHE.sub(currentBalance, amountToSubtract);

@@ -4,14 +4,13 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./PoolManager.sol";
 import "./CreditOracle.sol";
-import {FHE, euint64, euint32, ebool} from "@fhevm/solidity/lib/FHE.sol";
-import {FhenixEthereumConfig} from "@fhevm/solidity/config/FhenixConfig.sol";
+import {FHE, euint64, euint32, ebool} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
 /**
  * @title ScoreManager
- * @dev Manages user credit scores and calculates dynamic borrowing limits using Fhenix FHEVM.
+ * @dev Manages user credit scores and calculates dynamic borrowing limits using Fhenix CoFHE.
  */
-contract ScoreManager is Ownable, FhenixEthereumConfig {
+contract ScoreManager is Ownable {
     PoolManager public poolManager;
     CreditOracle public creditOracle;
 
@@ -48,14 +47,14 @@ contract ScoreManager is Ownable, FhenixEthereumConfig {
         euint32 newScore;
         
         if (delta >= 0) {
-            newScore = FHE.add(current, uint32(delta));
+            newScore = FHE.add(current, FHE.asEuint32(uint32(delta)));
             // Cap at MAX_SCORE
             ebool isOver = FHE.gt(newScore, FHE.asEuint32(uint32(MAX_SCORE)));
             newScore = FHE.select(isOver, FHE.asEuint32(uint32(MAX_SCORE)), newScore);
         } else {
             uint32 absDelta = uint32(-delta);
             ebool canSub = FHE.gt(current, FHE.asEuint32(uint32(absDelta + MIN_SCORE)));
-            newScore = FHE.select(canSub, FHE.sub(current, absDelta), FHE.asEuint32(uint32(MIN_SCORE)));
+            newScore = FHE.select(canSub, FHE.sub(current, FHE.asEuint32(absDelta)), FHE.asEuint32(uint32(MIN_SCORE)));
         }
 
         FHE.allowThis(current);
@@ -109,12 +108,10 @@ contract ScoreManager is Ownable, FhenixEthereumConfig {
         
         // Multiplier: Score / 1000
         // (totalEffectiveCollateral * score) / 1000
-        euint64 limit = FHE.div(FHE.mul(totalEffectiveCollateral, FHE.asEuint64(score)), 1000);
+        euint64 limit = FHE.div(FHE.mul(totalEffectiveCollateral, FHE.asEuint64(score)), FHE.asEuint64(1000));
         FHE.allow(limit, user);
         FHE.allow(limit, msg.sender); // Allow LoanEngine
         FHE.allowThis(limit);
         return limit;
     }
 }
-
-

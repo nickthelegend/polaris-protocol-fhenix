@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { FHE, euint64, externalEuint64, ebool } from "@fhevm/solidity/lib/FHE.sol";
-import { FhenixEthereumConfig } from "@fhevm/solidity/config/FhenixConfig.sol";
+import { FHE, euint64, InEuint64, ebool } from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
 /**
  * @title PrivateCollateralVault
- * @notice Confidential collateral management using Fhenix FHEVM
+ * @notice Confidential collateral management using Fhenix CoFHE
  */
-contract PrivateCollateralVault is FhenixEthereumConfig {
+contract PrivateCollateralVault {
     // Mapping of user to their collateral amount (encrypted)
     mapping(address => euint64) private collateralAmounts;
 
@@ -44,10 +43,9 @@ contract PrivateCollateralVault is FhenixEthereumConfig {
     /**
      * @notice Deposit collateral privately
      * @param encryptedAmount The encrypted amount handle
-     * @param inputProof Proof of encryption
      */
-    function depositCollateral(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+    function depositCollateral(InEuint64 calldata encryptedAmount) public {
+        euint64 amount = FHE.asEuint64(encryptedAmount);
 
         euint64 newCollateral;
         if (FHE.isInitialized(collateralAmounts[msg.sender])) {
@@ -65,19 +63,23 @@ contract PrivateCollateralVault is FhenixEthereumConfig {
         emit CollateralDeposited(msg.sender);
     }
 
+    // Alias deposit to align with frontend mega prompt
+    function deposit(InEuint64 calldata encryptedAmount) external {
+        depositCollateral(encryptedAmount);
+    }
+
     /**
      * @notice Withdraw collateral privately
      * @param encryptedAmount The encrypted amount handle
-     * @param inputProof Proof of encryption
      */
-    function withdrawCollateral(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+    function withdrawCollateral(InEuint64 calldata encryptedAmount) public {
+        euint64 amount = FHE.asEuint64(encryptedAmount);
         
         require(FHE.isInitialized(collateralAmounts[msg.sender]), "No collateral found");
         euint64 currentCollateral = collateralAmounts[msg.sender];
 
         // Cap withdrawal at current balance (branchless, no underflow)
-        ebool hasCollateral = FHE.le(amount, currentCollateral);
+        ebool hasCollateral = FHE.lte(amount, currentCollateral);
         euint64 amountToSubtract = FHE.select(hasCollateral, amount, currentCollateral);
         
         euint64 newCollateral = FHE.sub(currentCollateral, amountToSubtract);
@@ -91,11 +93,21 @@ contract PrivateCollateralVault is FhenixEthereumConfig {
         emit CollateralWithdrawn(msg.sender);
     }
 
+    // Alias withdraw to align with frontend mega prompt
+    function withdraw(InEuint64 calldata encryptedAmount) external {
+        withdrawCollateral(encryptedAmount);
+    }
+
     /**
      * @notice Get encrypted collateral amount of the user
      * @param user The user address
      */
     function getCollateralAmount(address user) external view returns (euint64) {
+        return collateralAmounts[user];
+    }
+
+    // Alias getCollateralHandle to align with frontend mega prompt
+    function getCollateralHandle(address user) external view returns (euint64) {
         return collateralAmounts[user];
     }
 }

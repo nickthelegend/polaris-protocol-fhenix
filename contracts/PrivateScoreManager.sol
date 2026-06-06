@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { FHE, euint64, externalEuint64, ebool } from "@fhevm/solidity/lib/FHE.sol";
-import { FhenixEthereumConfig } from "@fhevm/solidity/config/FhenixConfig.sol";
+import { FHE, euint64, InEuint64, ebool } from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
 /**
  * @title PrivateScoreManager
- * @notice Confidential credit score AND credit limit using Fhenix FHEVM.
+ * @notice Confidential credit score AND credit limit using Fhenix CoFHE.
  *         Both values are encrypted on-chain — only the user can decrypt.
  */
-contract PrivateScoreManager is FhenixEthereumConfig {
+contract PrivateScoreManager {
 
     uint64 public constant MIN_SCORE = 300;
     uint64 public constant MAX_SCORE = 850;
@@ -38,6 +37,7 @@ contract PrivateScoreManager is FhenixEthereumConfig {
         emit OwnershipTransferred(owner, newOwner);
         owner = newOwner;
     }
+    
     function authorizeCaller(address caller) external onlyOwner {
         authorizedCallers[caller] = true;
         emit CallerAuthorized(caller);
@@ -61,7 +61,7 @@ contract PrivateScoreManager is FhenixEthereumConfig {
         _ensureInitialized(user);
         euint64 current = encryptedScores[user];
         euint64 uncapped = FHE.add(current, FHE.asEuint64(REPAYMENT_BONUS));
-        ebool ok = FHE.le(uncapped, FHE.asEuint64(MAX_SCORE));
+        ebool ok = FHE.lte(uncapped, FHE.asEuint64(MAX_SCORE));
         euint64 finalScore = FHE.select(ok, uncapped, FHE.asEuint64(MAX_SCORE));
         encryptedScores[user] = finalScore;
         FHE.allowThis(finalScore); FHE.allow(finalScore, user);
@@ -72,7 +72,7 @@ contract PrivateScoreManager is FhenixEthereumConfig {
         _ensureInitialized(user);
         euint64 current = encryptedScores[user];
         euint64 threshold = FHE.add(FHE.asEuint64(MIN_SCORE), FHE.asEuint64(LIQUIDATION_PENALTY));
-        ebool canSub = FHE.ge(current, threshold);
+        ebool canSub = FHE.gte(current, threshold);
         euint64 subbed = FHE.sub(current, FHE.asEuint64(LIQUIDATION_PENALTY));
         euint64 finalScore = FHE.select(canSub, subbed, FHE.asEuint64(MIN_SCORE));
         encryptedScores[user] = finalScore;
@@ -82,16 +82,16 @@ contract PrivateScoreManager is FhenixEthereumConfig {
 
     // ── Credit Limit Logic ───────────────────────────────────────────────
 
-    function setCreditLimit(address user, externalEuint64 encLimit, bytes calldata proof) external onlyOwner {
+    function setCreditLimit(address user, InEuint64 calldata encLimit) external onlyOwner {
         _ensureInitialized(user);
-        euint64 lim = FHE.fromExternal(encLimit, proof);
+        euint64 lim = FHE.asEuint64(encLimit);
         encryptedLimits[user] = lim;
         FHE.allowThis(lim); FHE.allow(lim, user);
         emit LimitUpdated(user);
     }
 
-    function setScore(address user, externalEuint64 encScore, bytes calldata proof) external onlyOwner {
-        euint64 s = FHE.fromExternal(encScore, proof);
+    function setScore(address user, InEuint64 calldata encScore) external onlyOwner {
+        euint64 s = FHE.asEuint64(encScore);
         encryptedScores[user] = s;
         isInitialized[user] = true;
         FHE.allowThis(s); FHE.allow(s, user);

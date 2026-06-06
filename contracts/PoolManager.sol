@@ -5,19 +5,80 @@ import "./interfaces/INativeQueryVerifier.sol";
 import "./interfaces/EvmV1Decoder.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {FHE, euint64, externalEuint64, ebool} from "@fhevm/solidity/lib/FHE.sol";
-import {FhenixEthereumConfig} from "@fhevm/solidity/config/FhenixConfig.sol";
+import {FHE, euint64, InEuint64, ebool} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
-contract PoolManager is Ownable, ReentrancyGuard, FhenixEthereumConfig {
+contract PoolManager is Ownable, ReentrancyGuard {
     INativeQueryVerifier public immutable VERIFIER;
     address public loanEngine;
     bytes32 public constant TRANSFER_EVENT_SIGNATURE = 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
 
+    struct Pool { 
+        uint64 totalLiquidity; 
+        uint64 totalShares;
+        address tokenOnSource; 
+        bool isInitialized;
+    }
+    
+    mapping(address => Pool) public pools;
+    // user => token => shares (Encrypted)
+    mapping(address => mapping(address => euint64)) private lpShares;
+    mapping(bytes32 => bool) public processedQueries;
+    
+    // Mapping of ChainID => TokenAddress => IsWhitelisted
+    mapping(uint64 => mapping(address => bool)) public whitelistedSourceTokens;
+    // Mapping of ChainID => LiquidityVaultAddress
+    mapping(uint64 => address) public sourceVaults;
+    
+    address[] public whitelistedTokens;
+    mapping(address => bool) public isTokenWhitelisted;
+    uint256 public withdrawalNonce;
+
+    struct PendingWithdrawal {
+        euint64 amount;
+        address tokenOnSource;
+        uint64 destChainId;
+        bool active;
+    }
+    mapping(uint256 => PendingWithdrawal) public pendingWithdrawals;
+
+    event LiquidityAdded(address indexed user, address indexed tokenOnSource, uint256 amount);
+    event LiquidityWithdrawn(address indexed user, address indexed tokenOnSource, uint256 amount);
+    event WithdrawalAuthorized(address indexed user, address indexed tokenOnSource, uint256 amount, uint256 nonce, uint64 destChainId);
+    event LiquiditySlashed(address indexed user, address indexed token, uint256 amount);
+    event SourceChainConfigured(uint64 indexed chainId, address indexed vault, address indexed token, bool status);
+    event TokenWhitelisted(address indexed token, bool status);
+    event WithdrawalRequested(address indexed user, bytes32 handle, uint256 nonce);
+    event WithdrawalFinalized(address indexed user, uint256 amount);
+
+    constructor(address _verifier) Ownable(msg.sender) {
+        if (_verifier == address(0)) {
+            VERIFIER = NativeQueryVerifierLib.getVerifier();
+        } else {
+            VERIFIER = INativeQueryVerifier(_verifier);
+        }
+    }
+
+    function setLoanEngine(address _loanEngine) external onlyOwner {
+        loanEngine = _loanEngine;
+    }
+
+    function setWhitelistedToken(address token, bool status) external onlyOwner {
+        if (status && !isTokenWhitelisted[token]) whitelistedTokens.push(token);
+        isTokenWhitelisted[token] = status;
+        emit TokenWhitelisted(token, status);
+    }
+
+    function setSourceParams(uint64 chainId, address vault, address token, bool status) external onlyOwner {
+        sourceVaults[chainId] = vault;
+        whitelistedSourceTokens[chainId][token] = status;
+        emit SourceChainConfigured(chainId, vault, token, status);
+    }
+
     /**
      * @dev Supply liquidity to the pool (Encrypted).
      */
-    function supply(address token, externalEuint64 encryptedAmount, bytes calldata inputProof, uint64 clearAmount) external {
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+    function supply(address token, InEuint64 calldata encryptedAmount, uint64 clearAmount) public {
+        euint64 amount = FHE.asEuint64(encryptedAmount);
         
         Pool storage pool = pools[token];
         if (!pool.isInitialized) {
@@ -45,59 +106,11 @@ contract PoolManager is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         emit LiquidityAdded(msg.sender, token, clearAmount);
     }
 
-    struct Pool { 
-        uint64 totalLiquidity; 
-        uint64 totalShares;
-        address tokenOnSource; 
-        bool isInitialized;
+    // Alias supply to support single-arg calls from the frontend hook
+    function supply(InEuint64 calldata encryptedAmount) external {
+        address token = whitelistedTokens.length > 0 ? whitelistedTokens[0] : address(0);
+        supply(token, encryptedAmount, 0);
     }
-    
-    mapping(address => Pool) public pools;
-    // user => token => shares (Encrypted)
-    mapping(address => mapping(address => euint64)) private lpShares;
-    mapping(bytes32 => bool) public processedQueries;
-    
-    // Mapping of ChainID => TokenAddress => IsWhitelisted
-    mapping(uint64 => mapping(address => bool)) public whitelistedSourceTokens;
-    // Mapping of ChainID => LiquidityVaultAddress
-    mapping(uint64 => address) public sourceVaults;
-    
-    address[] public whitelistedTokens;
-    mapping(address => bool) public isTokenWhitelisted;
-    uint256 public withdrawalNonce;
-
-    event LiquidityAdded(address indexed user, address indexed tokenOnSource, uint256 amount);
-    event LiquidityWithdrawn(address indexed user, address indexed tokenOnSource, uint256 amount);
-    event WithdrawalAuthorized(address indexed user, address indexed tokenOnSource, uint256 amount, uint256 nonce, uint64 destChainId);
-    event LiquiditySlashed(address indexed user, address indexed token, uint256 amount);
-    event SourceChainConfigured(uint64 indexed chainId, address indexed vault, address indexed token, bool status);
-    event TokenWhitelisted(address indexed token, bool status);
-
-    constructor(address _verifier) Ownable(msg.sender) {
-        if (_verifier == address(0)) {
-            VERIFIER = NativeQueryVerifierLib.getVerifier();
-        } else {
-            VERIFIER = INativeQueryVerifier(_verifier);
-        }
-    }
-
-    function setLoanEngine(address _loanEngine) external onlyOwner {
-        loanEngine = _loanEngine;
-    }
-
-    function setWhitelistedToken(address token, bool status) external onlyOwner {
-        if (status && !isTokenWhitelisted[token]) whitelistedTokens.push(token);
-        isTokenWhitelisted[token] = status;
-        emit TokenWhitelisted(token, status);
-    }
-
-    function setSourceParams(uint64 chainId, address vault, address token, bool status) external onlyOwner {
-        sourceVaults[chainId] = vault;
-        whitelistedSourceTokens[chainId][token] = status;
-        emit SourceChainConfigured(chainId, vault, token, status);
-    }
-
-
 
     function addLiquidityFromProof(
         uint64 chainKey, uint64 blockHeight, bytes calldata encodedTransaction,
@@ -196,8 +209,7 @@ contract PoolManager is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         Pool storage pool = pools[token];
         if (!pool.isInitialized || pool.totalShares == 0) return FHE.asEuint64(0);
         
-        // (lpShares[user][token] * pool.totalLiquidity) / pool.totalShares
-        euint64 balance = FHE.div(FHE.mul(lpShares[user][token], pool.totalLiquidity), pool.totalShares);
+        euint64 balance = FHE.div(FHE.mul(lpShares[user][token], FHE.asEuint64(pool.totalLiquidity)), FHE.asEuint64(pool.totalShares));
         FHE.allow(balance, msg.sender);
         FHE.allowThis(balance);
         return balance;
@@ -207,27 +219,18 @@ contract PoolManager is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         return lpShares[user][token];
     }
 
-    struct PendingWithdrawal {
-        euint64 amount;
-        address tokenOnSource;
-        uint64 destChainId;
-        bool active;
-    }
-    mapping(uint256 => PendingWithdrawal) public pendingWithdrawals;
-
-    function requestWithdrawal(address tokenOnSource, externalEuint64 encryptedAmount, bytes calldata inputProof, uint64 destChainId) external nonReentrant {
+    function requestWithdrawal(address tokenOnSource, InEuint64 calldata encryptedAmount, uint64 destChainId) external nonReentrant {
         Pool storage pool = pools[tokenOnSource];
         require(pool.isInitialized, "Pool not found");
         
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+        euint64 amount = FHE.asEuint64(encryptedAmount);
         euint64 userBalance = getAssetBalance(msg.sender, tokenOnSource);
         
-        ebool hasBalance = FHE.ge(userBalance, amount);
+        ebool hasBalance = FHE.gte(userBalance, amount);
         euint64 actualWithdrawAmount = FHE.select(hasBalance, amount, userBalance);
 
-        // This is tricky: we burn shares based on encrypted actualWithdrawAmount
         // sharesToBurn = (actualWithdrawAmount * pool.totalShares) / pool.totalLiquidity
-        euint64 sharesToBurn = FHE.div(FHE.mul(actualWithdrawAmount, pool.totalShares), pool.totalLiquidity);
+        euint64 sharesToBurn = FHE.div(FHE.mul(actualWithdrawAmount, FHE.asEuint64(pool.totalShares)), FHE.asEuint64(pool.totalLiquidity));
         
         lpShares[msg.sender][tokenOnSource] = FHE.sub(lpShares[msg.sender][tokenOnSource], sharesToBurn);
         FHE.allow(lpShares[msg.sender][tokenOnSource], msg.sender);
@@ -242,29 +245,22 @@ contract PoolManager is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         });
 
         FHE.allowThis(actualWithdrawAmount);
-        FHE.makePubliclyDecryptable(actualWithdrawAmount);
+        FHE.allowPublic(actualWithdrawAmount);
         
         emit WithdrawalAuthorized(msg.sender, tokenOnSource, 0, nonce, destChainId);
+        emit WithdrawalRequested(msg.sender, euint64.unwrap(actualWithdrawAmount), nonce);
     }
 
     function finalizeWithdrawal(
         uint256 nonce,
-        bytes memory abiEncodedClearResult,
-        bytes memory decryptionProof
+        uint64 clearAmount,
+        bytes calldata signature
     ) external nonReentrant {
         PendingWithdrawal storage pw = pendingWithdrawals[nonce];
         require(pw.active, "Not active");
 
-        bytes32[] memory handles = new bytes32[](1);
-        handles[0] = FHE.toBytes32(pw.amount);
-        
-        // On local Hardhat (31337), we skip signature check to allow easy testing of the async flow.
-        // On Sepolia (11155111) or other live networks, the check is mandatory.
-        if (block.chainid != 31337) {
-            FHE.checkSignatures(handles, abiEncodedClearResult, decryptionProof);
-        }
+        FHE.publishDecryptResult(pw.amount, clearAmount, signature);
 
-        uint64 clearAmount = abi.decode(abiEncodedClearResult, (uint64));
         pw.active = false;
 
         // Update public totals AFTER reveal
@@ -274,6 +270,7 @@ contract PoolManager is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         pool.totalLiquidity -= clearAmount;
 
         emit LiquidityWithdrawn(msg.sender, pw.tokenOnSource, uint256(clearAmount));
+        emit WithdrawalFinalized(msg.sender, uint256(clearAmount));
     }
 
     function slashLiquidity(address user, address token, euint64 amount) external {
@@ -282,24 +279,21 @@ contract PoolManager is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         require(pool.isInitialized, "Pool not found");
 
         euint64 userShares = lpShares[user][token];
-        euint64 sharesToBurn = FHE.div(FHE.mul(amount, pool.totalShares), pool.totalLiquidity);
+        euint64 sharesToBurn = FHE.div(FHE.mul(amount, FHE.asEuint64(pool.totalShares)), FHE.asEuint64(pool.totalLiquidity));
         
-        ebool hasShares = FHE.ge(userShares, sharesToBurn);
+        ebool hasShares = FHE.gte(userShares, sharesToBurn);
         euint64 actualSharesToBurn = FHE.select(hasShares, sharesToBurn, userShares);
         
         lpShares[user][token] = FHE.sub(userShares, actualSharesToBurn);
         FHE.allow(lpShares[user][token], user);
         FHE.allowThis(lpShares[user][token]);
 
-        // Slash is trickier for public totals. For hackathon, we skip public total update on encrypted slash
-        // or we require a reveal. Let's assume we don't update public totals on slash to keep it simple.
         emit LiquiditySlashed(user, token, 0); 
     }
 
     function distributeInterest(address token, euint64 amount) external {
         require(msg.sender == loanEngine, "Only LoanEngine");
-        // For hackathon, we require a reveal to update public totals or just skip.
-        // Let's assume interest distribution is not reflected in public pool size for now.
+        // For hackathon, we skip public total update on encrypted interest
     }
 
     function getPoolLiquidity(address token) external view returns (uint64) {

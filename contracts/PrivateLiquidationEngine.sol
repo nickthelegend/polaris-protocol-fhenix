@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { FHE, euint64, ebool } from "@fhevm/solidity/lib/FHE.sol";
-import { FhenixEthereumConfig } from "@fhevm/solidity/config/FhenixConfig.sol";
+import { FHE, euint64, InEuint64, ebool } from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 import { PrivateCollateralVault } from "./PrivateCollateralVault.sol";
 import { PrivateBorrowManager } from "./PrivateBorrowManager.sol";
 
 /**
  * @title PrivateLiquidationEngine
- * @notice Confidential liquidation logic using Fhenix FHEVM
+ * @notice Confidential liquidation logic using Fhenix CoFHE
  */
-contract PrivateLiquidationEngine is FhenixEthereumConfig {
+contract PrivateLiquidationEngine {
     PrivateCollateralVault public collateralVault;
     PrivateBorrowManager public borrowManager;
 
@@ -63,7 +62,7 @@ contract PrivateLiquidationEngine is FhenixEthereumConfig {
 
         pendingHealthChecks[user] = isUnhealthy;
         FHE.allowThis(isUnhealthy);
-        FHE.makePubliclyDecryptable(isUnhealthy);
+        FHE.allowPublic(isUnhealthy);
 
         emit LiquidationStarted(user);
     }
@@ -71,29 +70,23 @@ contract PrivateLiquidationEngine is FhenixEthereumConfig {
     /**
      * @notice Resolve audit with KMS decryption proof
      * @param user The user address to liquidate
-     * @param abiEncodedClearResult ABI-encoded decrypted bool
-     * @param decryptionProof KMS decryption proof
+     * @param isUnhealthy Decrypted health status (true if unhealthy)
+     * @param signature KMS decryption signature
      */
     function resolveAudit(
         address user,
-        bytes memory abiEncodedClearResult,
-        bytes memory decryptionProof
+        bool isUnhealthy,
+        bytes calldata signature
     ) external {
         ebool check = pendingHealthChecks[user];
         require(FHE.isInitialized(check), "No pending audit");
 
-        bytes32[] memory handles = new bytes32[](1);
-        handles[0] = FHE.toBytes32(check);
-        
-        FHE.checkSignatures(handles, abiEncodedClearResult, decryptionProof);
+        FHE.publishDecryptResult(check, isUnhealthy, signature);
 
-        bool isUnhealthy = abi.decode(abiEncodedClearResult, (bool));
         require(isUnhealthy, "User is healthy, cannot liquidate");
 
         isLiquidatable[user] = true;
-        // Correct way to clear is to set to uninitialized/zero via casting if needed, 
-        // but here we just leave it or could asEbool(false) and allowThis.
-        // Let's just use asEbool(false) to clear.
+        
         ebool cleared = FHE.asEbool(false);
         FHE.allowThis(cleared);
         pendingHealthChecks[user] = cleared;

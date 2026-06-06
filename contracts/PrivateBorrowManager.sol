@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { FHE, euint64, externalEuint64, ebool } from "@fhevm/solidity/lib/FHE.sol";
-import { FhenixEthereumConfig } from "@fhevm/solidity/config/FhenixConfig.sol";
+import { FHE, euint64, InEuint64, ebool } from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 import { PrivateCollateralVault } from "./PrivateCollateralVault.sol";
 
 /**
  * @title PrivateBorrowManager
- * @notice Confidential debt management using Fhenix FHEVM
+ * @notice Confidential debt management using Fhenix CoFHE
  */
-contract PrivateBorrowManager is FhenixEthereumConfig {
+contract PrivateBorrowManager {
     PrivateCollateralVault public collateralVault;
     address public lendingPool;
 
@@ -25,6 +24,8 @@ contract PrivateBorrowManager is FhenixEthereumConfig {
 
     event Borrowed(address indexed user);
     event Repaid(address indexed user);
+    event DecryptionRequested(address indexed user, bytes32 handle);
+    event DebtProfileRevealed(address indexed user, uint64 cleartextDebt);
 
     constructor(address _collateralVault) {
         collateralVault = PrivateCollateralVault(_collateralVault);
@@ -61,10 +62,9 @@ contract PrivateBorrowManager is FhenixEthereumConfig {
     /**
      * @notice Borrow tokens privately
      * @param encryptedAmount The encrypted amount handle
-     * @param inputProof Proof of encryption
      */
-    function borrow(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
-        euint64 amountToBorrow = FHE.fromExternal(encryptedAmount, inputProof);
+    function borrow(InEuint64 calldata encryptedAmount) external {
+        euint64 amountToBorrow = FHE.asEuint64(encryptedAmount);
         
         euint64 currentDebt;
         if (FHE.isInitialized(debtAmounts[msg.sender])) {
@@ -82,7 +82,7 @@ contract PrivateBorrowManager is FhenixEthereumConfig {
         euint64 weightedCollateral = FHE.mul(collateral, FHE.asEuint64(100));
         euint64 requiredCollateral = FHE.mul(newDebt, FHE.asEuint64(COLLATERAL_RATIO));
 
-        ebool isHealthy = FHE.ge(weightedCollateral, requiredCollateral);
+        ebool isHealthy = FHE.gte(weightedCollateral, requiredCollateral);
 
         // Only update debt if it's healthy (branchless)
         euint64 finalizedDebt = FHE.select(isHealthy, newDebt, currentDebt);
@@ -99,15 +99,14 @@ contract PrivateBorrowManager is FhenixEthereumConfig {
     /**
      * @notice Repay tokens privately
      * @param encryptedAmount The encrypted amount handle
-     * @param inputProof Proof of encryption
      */
-    function repay(externalEuint64 encryptedAmount, bytes calldata inputProof) external {
-        euint64 amountToRepay = FHE.fromExternal(encryptedAmount, inputProof);
+    function repay(InEuint64 calldata encryptedAmount) external {
+        euint64 amountToRepay = FHE.asEuint64(encryptedAmount);
         
         require(FHE.isInitialized(debtAmounts[msg.sender]), "No debt found");
         euint64 currentDebt = debtAmounts[msg.sender];
 
-        ebool hasDebt = FHE.le(amountToRepay, currentDebt);
+        ebool hasDebt = FHE.lte(amountToRepay, currentDebt);
         euint64 amountToSubtract = FHE.select(hasDebt, amountToRepay, currentDebt);
 
         euint64 newDebt = FHE.sub(currentDebt, amountToSubtract);
@@ -127,5 +126,27 @@ contract PrivateBorrowManager is FhenixEthereumConfig {
      */
     function getDebtAmount(address user) external view returns (euint64) {
         return debtAmounts[user];
+    }
+
+    // Alias getDebtHandle to align with potential frontend usages
+    function getDebtHandle(address user) external view returns (euint64) {
+        return debtAmounts[user];
+    }
+
+    // Two-step decryption/reveal flow for debt management
+    function requestPublicDebt(address user) external {
+        euint64 debt = debtAmounts[user];
+        FHE.allowPublic(debt);
+        emit DecryptionRequested(user, euint64.unwrap(debt));
+    }
+
+    function finalizePublicDebt(
+        address user,
+        uint64 cleartextDebt,
+        bytes calldata signature
+    ) external {
+        euint64 debt = debtAmounts[user];
+        FHE.publishDecryptResult(debt, cleartextDebt, signature);
+        emit DebtProfileRevealed(user, cleartextDebt);
     }
 }

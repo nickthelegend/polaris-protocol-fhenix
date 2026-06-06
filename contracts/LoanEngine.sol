@@ -8,10 +8,9 @@ import "./PoolManager.sol";
 import "./interfaces/INativeQueryVerifier.sol";
 import "./interfaces/EvmV1Decoder.sol";
 import "./ProtocolFunds.sol";
-import {FHE, euint64, externalEuint64, ebool} from "@fhevm/solidity/lib/FHE.sol";
-import {FhenixEthereumConfig} from "@fhevm/solidity/config/FhenixConfig.sol";
+import {FHE, euint64, InEuint64, ebool, euint32} from "@fhenixprotocol/cofhe-contracts/FHE.sol";
 
-contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
+contract LoanEngine is Ownable, ReentrancyGuard {
     ScoreManager public scoreManager;
     PoolManager public poolManager;
     ProtocolFunds public protocolFunds;
@@ -44,6 +43,7 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
     event RepaymentMade(uint256 indexed loanId, uint256 amount);
     event LoanDefaulted(uint256 indexed loanId);
     event LoanFullyRepaid(uint256 indexed loanId);
+    event RepaymentAuditRequested(uint256 indexed loanId, bytes32 handle);
 
     constructor(address _scoreManager, address _poolManager, address _verifier, address _protocolFunds) Ownable(msg.sender) {
         scoreManager = ScoreManager(_scoreManager);
@@ -56,18 +56,18 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         }
     }
 
-    function createLoan(address user, externalEuint64 amount, bytes calldata inputProof, address poolToken) external {
-        euint64 principal = FHE.fromExternal(amount, inputProof);
+    function createLoan(address user, InEuint64 calldata amount, address poolToken) public {
+        euint64 principal = FHE.asEuint64(amount);
         euint32 score = scoreManager.getScore(user);
         euint64 limit = scoreManager.getCreditLimit(user);
         euint64 currentDebt = userActiveDebt[user];
         
-        ebool isWithinLimit = FHE.le(FHE.add(currentDebt, principal), limit);
-        // If over limit, we effectively create a 0 principal loan (since we lack FHE.req)
+        ebool isWithinLimit = FHE.lte(FHE.add(currentDebt, principal), limit);
+        // If over limit, we effectively create a 0 principal loan
         euint64 actualPrincipal = FHE.select(isWithinLimit, principal, FHE.asEuint64(0));
         
         // Calculate 56-day interest: interest = actualPrincipal * rate * time / (10000 * 365)
-        euint64 interest = FHE.div(FHE.mul(actualPrincipal, uint64(56000)), uint64(3650000));
+        euint64 interest = FHE.div(FHE.mul(actualPrincipal, FHE.asEuint64(56000)), FHE.asEuint64(3650000));
         
         uint256[] memory dueDates = new uint256[](4);
         dueDates[0] = block.timestamp + 14 days;
@@ -102,6 +102,11 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
 
         emit LoanCreated(loanCount, user, 0, 0); // Principal/Interest are private
         loanCount++;
+    }
+
+    // Alias borrow to support custom calls
+    function borrow(InEuint64 calldata amount) external {
+        createLoan(msg.sender, amount, address(0)); // Default token
     }
 
     function repayFromProof(
@@ -153,7 +158,7 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         euint64 interestPaid = FHE.select(hasPaidPrincipal, FHE.select(FHE.gt(excessOverPrincipal, effectiveAmount), effectiveAmount, excessOverPrincipal), FHE.asEuint64(0));
 
         // Distribution logic using encrypted arithmetic
-        euint64 protocolFee = FHE.div(FHE.mul(interestPaid, uint64(PROTOCOL_FEE_BPS)), uint64(10000));
+        euint64 protocolFee = FHE.div(FHE.mul(interestPaid, FHE.asEuint64(uint64(PROTOCOL_FEE_BPS))), FHE.asEuint64(10000));
         euint64 lenderYield = FHE.sub(interestPaid, protocolFee);
         
         FHE.allow(protocolFee, address(protocolFunds));
@@ -166,9 +171,8 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         FHE.allow(effectiveAmount, address(scoreManager));
         scoreManager.recordRepayment(loan.borrower, effectiveAmount);
         
-        ebool isFullyRepaid = FHE.ge(loan.repaid, totalDebt);
+        ebool isFullyRepaid = FHE.gte(loan.repaid, totalDebt);
         FHE.allowThis(isFullyRepaid);
-        // Status change must be audited via auditRepayment (Step 1)
         
         emit RepaymentMade(loanId, 0); // Amount 0 indicates encrypted repayment
     }
@@ -181,10 +185,12 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         require(loan.status == LoanStatus.Active, "Not active");
         
         euint64 totalDebt = FHE.add(loan.principal, loan.interestAmount);
-        ebool isFullyRepaid = FHE.ge(loan.repaid, totalDebt);
+        ebool isFullyRepaid = FHE.gte(loan.repaid, totalDebt);
         
         FHE.allowThis(isFullyRepaid);
-        FHE.makePubliclyDecryptable(isFullyRepaid);
+        FHE.allowPublic(isFullyRepaid);
+
+        emit RepaymentAuditRequested(loanId, ebool.unwrap(isFullyRepaid));
     }
 
     /**
@@ -192,21 +198,17 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
      */
     function finalizeRepaymentAudit(
         uint256 loanId,
-        bytes memory abiEncodedClearResult,
-        bytes memory decryptionProof
+        bool isFullyRepaid,
+        bytes calldata signature
     ) external {
         Loan storage loan = loans[loanId];
         require(loan.status == LoanStatus.Active, "Not active");
         
         euint64 totalDebt = FHE.add(loan.principal, loan.interestAmount);
-        ebool isFullyRepaidEnc = FHE.ge(loan.repaid, totalDebt);
+        ebool isFullyRepaidEnc = FHE.gte(loan.repaid, totalDebt);
         
-        bytes32[] memory handles = new bytes32[](1);
-        handles[0] = FHE.toBytes32(isFullyRepaidEnc);
-        
-        FHE.checkSignatures(handles, abiEncodedClearResult, decryptionProof);
+        FHE.publishDecryptResult(isFullyRepaidEnc, isFullyRepaid, signature);
 
-        bool isFullyRepaid = abi.decode(abiEncodedClearResult, (bool));
         require(isFullyRepaid, "Not fully repaid");
 
         loan.status = LoanStatus.Repaid;
@@ -244,10 +246,10 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         emit LoanDefaulted(loanId);
     }
 
-    function repay(uint256 loanId, externalEuint64 encryptedAmount, bytes calldata inputProof) external {
+    function repay(uint256 loanId, InEuint64 calldata encryptedAmount) external {
         Loan storage loan = loans[loanId];
         require(loan.borrower == msg.sender, "Only borrower");
-        euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
+        euint64 amount = FHE.asEuint64(encryptedAmount);
         _applyRepayment(loanId, amount);
     }
 
@@ -263,4 +265,3 @@ contract LoanEngine is Ownable, ReentrancyGuard, FhenixEthereumConfig {
         return loans[loanId].borrower;
     }
 }
-
