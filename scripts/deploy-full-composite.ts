@@ -14,45 +14,25 @@ async function main() {
     }
 
     // --- 1. DEPLOY TOKENS ---
-    console.log("\n--- 1. Deploying Mock Tokens ---");
-    const MockERC20 = await ethers.getContractFactory("MockERC20");
-    
-    const mockBNB = await MockERC20.deploy("Mock BNB", "BNB", 18);
-    await mockBNB.waitForDeployment();
-    const bnbAddr = await mockBNB.getAddress();
+    console.log("\n--- 1. Reusing Mock Tokens ---");
+    const bnbAddr = "0xEB5c6F2094cEDafcC9dBba249f43BacacFb085CA";
+    const usdcAddr = "0x209e6F4c016245833DE2999E170eb14F07C29BB1";
+    const usdtAddr = "0x010453c439A7a91e372AA256b7B6F65f59E7F44C";
+    const wethAddr = "0xaf4D66F3f9D6325fd08ef6174949376702b76431";
     console.log("✅ MockBNB:", bnbAddr);
-
-    const mockUSDC = await MockERC20.deploy("Mock USDC", "USDC", 6);
-    await mockUSDC.waitForDeployment();
-    const usdcAddr = await mockUSDC.getAddress();
     console.log("✅ MockUSDC:", usdcAddr);
-
-    const mockUSDT = await MockERC20.deploy("Mock USDT", "USDT", 6);
-    await mockUSDT.waitForDeployment();
-    const usdtAddr = await mockUSDT.getAddress();
     console.log("✅ MockUSDT:", usdtAddr);
-
-    const mockWETH = await MockERC20.deploy("Mock WETH", "WETH", 18);
-    await mockWETH.waitForDeployment();
-    const wethAddr = await mockWETH.getAddress();
     console.log("✅ MockWETH:", wethAddr);
 
     // --- 2. DEPLOY FOUNDATIONS ---
-    console.log("\n--- 2. Deploying Base Infrastructure ---");
-    const EvmV1Decoder = await ethers.getContractFactory("EvmV1Decoder");
-    const decoder = await EvmV1Decoder.deploy();
-    await decoder.waitForDeployment();
-    const decoderAddr = await decoder.getAddress();
+    console.log("\n--- 2. Reusing Base Infrastructure ---");
+    const decoderAddr = "0xfCa7f2e028630dd19b28Bd95Aee554422a4b0D42";
+    const oracleAddr = "0x958d0f0Ee78f0f92CF86609BD565438a98E1bd63";
     console.log("✅ EvmV1Decoder:", decoderAddr);
-
-    const CreditOracle = await ethers.getContractFactory("CreditOracle");
-    const oracle = await CreditOracle.deploy(deployer.address);
-    await oracle.waitForDeployment();
-    const oracleAddr = await oracle.getAddress();
     console.log("✅ CreditOracle:", oracleAddr);
 
     const ProtocolFunds = await ethers.getContractFactory("ProtocolFunds");
-    const funds = await ProtocolFunds.deploy(deployer.address);
+    const funds = await ProtocolFunds.deploy();
     await funds.waitForDeployment();
     const fundsAddr = await funds.getAddress();
     console.log("✅ ProtocolFunds:", fundsAddr);
