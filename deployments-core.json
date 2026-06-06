@@ -1,0 +1,10 @@
+{
+  "network": "uscTestnet",
+  "timestamp": "2026-02-11T08:54:46.027Z",
+  "contracts": {
+    "PoolManager": "0x590BF1A90eA44354B325aD4D04a61832769DE120",
+    "ScoreManager": "0x3fE9A95945D2c4ED1FbC213f5C826fAc22BFa341",
+    "LoanEngine": "0x7Fa685aeF7DE937cad4Cc30A281926b451b55DA4",
+    "MerchantRouter": "0x339a44F5Ff2BF65b4Cd3990F45e705532Ebf49a9"
+  }
+}

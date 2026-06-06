@@ -1,0 +1,7 @@
+{
+  "network": "uscTestnet",
+  "timestamp": "2026-02-11T09:22:17.378Z",
+  "contracts": {
+    "USDC": "0x58e67dEEEcde20f10eD90B5191f08f39e81B6658"
+  }
+}

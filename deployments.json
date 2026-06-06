@@ -1,0 +1,25 @@
+{
+  "master": {
+    "network": "ganache",
+    "chainId": "1337",
+    "poolManager": "0xB7f5B6dc3978046c7cEA05EB529e500400290675",
+    "loanEngine": "0x2a5653E5621A197600757C35abEC1c6C50Ea5344",
+    "scoreManager": "0x6EfC88aFa5bA8c0f68EbCEd8410c3B1c54b87242",
+    "protocolFunds": "0x91602066C09bdd9B42D1F5eBaC574664fbb27278",
+    "evmV1Decoder": "0xD94e2addDD42aDB66Ece7CD96419ad53699B167f"
+  },
+  "spokes": {
+    "sepolia": {
+      "chainId": 11155111,
+      "vault": "0x8C213a3Db9187966Ebf8DfD0488A225044265AeF",
+      "usdc": "0xbCFCF4D1B880Ea38b71E45394FaCC5b71678C44A",
+      "usdt": "0xf75C8eE5b4a005120bCF0D6d457A8000dddDea8f"
+    },
+    "hedera": {
+      "chainId": 296,
+      "vault": "0x214730188780a3A64fD24ede85f2724535772Ff0",
+      "usdc": "0x84373D817230268b2dE1d7727ca3c930293CCE51",
+      "usdt": "0xB159E0c8093081712c92e274DbFEa5A97A80cA30"
+    }
+  }
+}
