@@ -57,3 +57,21 @@ npx hardhat test
 
 ## 🔒 Security
 The protocol implements role-based access control (RBAC) and follows industry best practices for smart contract development. All private logic is built atop the mathematically proven security of FHE.
+
+---
+
+## 🌐 Sepolia Integration Tests (JavaScript E2E)
+A live end-to-end integration test suite is located in the core repository to verify the following Fhenix CoFHE operations on Sepolia:
+1. Faucet minting of USDT.
+2. Encrypted deposits into the `PrivateCollateralVault`.
+3. Encrypted borrowing via the `PrivateBorrowManager`.
+4. Encrypted repayments.
+5. Off-chain cryptographic signature attestation & profile updates with the `CreditOracle`.
+6. Live core loan creation under `LoanEngine`.
+
+To run the integration tests:
+```bash
+# In the polaris-core-fhenix directory:
+node scripts/integration-test-sepolia.js
+```
+
