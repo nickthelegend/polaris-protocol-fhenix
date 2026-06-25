@@ -31,7 +31,8 @@ const config: HardhatUserConfig = {
     sepolia: {
       url: process.env.SEPOLIA_RPC || "https://eth-sepolia.g.alchemy.com/v2/3qRB0TMQQv3hyKgav_6lF",
       chainId: 11155111,
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      gasPrice: 2_000_000_000 // 2 gwei — mines reliably without overpaying
     }
   },
   paths: {

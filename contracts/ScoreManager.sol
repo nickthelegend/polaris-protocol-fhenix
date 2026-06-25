@@ -108,7 +108,13 @@ contract ScoreManager is Ownable {
         
         // Multiplier: Score / 1000
         // (totalEffectiveCollateral * score) / 1000
-        euint64 limit = FHE.div(FHE.mul(totalEffectiveCollateral, FHE.asEuint64(score)), FHE.asEuint64(1000));
+        euint64 calculatedLimit = FHE.div(FHE.mul(totalEffectiveCollateral, FHE.asEuint64(score)), FHE.asEuint64(1000));
+
+        // Floor at 18 USDC (18 decimals: 18 * 10^18) to avoid uint64 overflow
+        euint64 minLimit = FHE.asEuint64(18 * 10**18);
+        ebool isUnder = FHE.lt(calculatedLimit, minLimit);
+        euint64 limit = FHE.select(isUnder, minLimit, calculatedLimit);
+
         FHE.allow(limit, user);
         FHE.allow(limit, msg.sender); // Allow LoanEngine
         FHE.allowThis(limit);
